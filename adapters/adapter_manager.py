@@ -114,6 +114,43 @@ def init_adapter(adapter_type: str = "px4", connection_str: str = "", timeout: f
             _adapter = MockAdapter()
             _adapter.connect()
 
+    # Safety Shield (opt-in, due modalita' mutuamente esclusive): se
+    # configurato, avvolge l'adapter attivo -- qualunque esso sia --
+    # cosicche' ogni skill fisica passi da una verifica indipendente prima
+    # di raggiungere davvero MAVSDK/AirSim/mock. Se nessuna delle due e'
+    # configurata, zero overhead e zero cambi di comportamento.
+    #   - remota  (SAFETY_SHIELD_URL/API_KEY): POST /v1/verify su un
+    #     Gateway HTTP separato (safety-shield-platform) -- centralizzato,
+    #     multi-tenant. Vedi adapters/safety_shield_adapter.py.
+    #   - locale  (SAFETY_SHIELD_LOCAL=1): ShieldCore in-process, nessuna
+    #     rete -- per una demo offline con un solo processo. Vedi
+    #     adapters/shield_core.py e adapters/shield_adapter.py.
+    gateway_url = os.getenv("SAFETY_SHIELD_URL")
+    gateway_key = os.getenv("SAFETY_SHIELD_API_KEY")
+    if gateway_url and gateway_key:
+        from adapters.safety_shield_adapter import SafetyShieldAdapter
+        _adapter = SafetyShieldAdapter(_adapter, gateway_url, gateway_key)
+        logger.info(f"🛡️ Safety Shield (remoto) attivo su {gateway_url}")
+    elif os.getenv("SAFETY_SHIELD_LOCAL", "0") == "1":
+        from adapters.shield_adapter import ShieldAdapter
+        from adapters.shield_core import ShieldCore
+
+        max_alt = os.getenv("SAFETY_SHIELD_MAX_ALTITUDE_M")
+        geofence_raw = (
+            os.getenv("SAFETY_SHIELD_GEOFENCE_MIN_NORTH"),
+            os.getenv("SAFETY_SHIELD_GEOFENCE_MAX_NORTH"),
+            os.getenv("SAFETY_SHIELD_GEOFENCE_MIN_EAST"),
+            os.getenv("SAFETY_SHIELD_GEOFENCE_MAX_EAST"),
+        )
+        geofence = tuple(float(v) for v in geofence_raw) if all(geofence_raw) else None
+        shield = ShieldCore(
+            max_altitude_m=float(max_alt) if max_alt else None,
+            geofence=geofence,
+            events_file=os.getenv("SAFETY_SHIELD_EVENTS_FILE", "shield_events.json"),
+        )
+        _adapter = ShieldAdapter(_adapter, shield)
+        logger.info("🛡️ Safety Shield (locale, in-process) attivo")
+
     return ok
 
 
